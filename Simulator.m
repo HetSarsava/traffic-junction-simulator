@@ -1,81 +1,101 @@
 figure('Color',[0 0 0]);
 hold on;
 axis equal off;
-xlim([0 20]);
-ylim([0 20]);
 
-% --- 1. Setup "+" Intersection ---
-road_width = 4;
-map_size = 20;
+% --- 1. Setup Map ---
+map_size = 60;
+road_width = 6;
 center = map_size / 2;
+xlim([0 map_size]);
+ylim([0 map_size]);
 
-% Calculate boundaries for the intersection box
-% The "Danger Zone" is where the roads overlap
-int_start = center - (road_width/2); % 10 - 2 = 8
-int_end   = center + (road_width/2); % 10 + 2 = 12
+% Intersection Zone
+int_start = center - (road_width/2);
+int_end   = center + (road_width/2);
 
-% Draw Vertical Road
+% Draw Roads
 rectangle('Position', [int_start, 0, road_width, map_size], ...
           'FaceColor', [0.1 0.1 0.1], 'EdgeColor', 'none');
-
-% Draw Horizontal Road
 rectangle('Position', [0, int_start, map_size, road_width], ...
           'FaceColor', [0.1 0.1 0.1], 'EdgeColor', 'none');
 
 % --- 2. Setup Cars ---
-% Dimensions
-car_w = 0.7 * road_width; 
-car_l = 2 * car_w;        
+car_w = 0.7 * road_width;
+car_l = 2 * car_w;
 
-% Car 1 (Blue) - Starting at Bottom (Vertical)
-c1_x = center - (car_w/2); 
-c1_y = 0; 
+% Car 1 (Bottom)
+c1_x = center - (car_w/2); c1_y = 0;
 hCar1 = rectangle('Position', [c1_x, c1_y, car_w, car_l], ...
                   'FaceColor', 'b', 'EdgeColor', 'none');
 
-% Car 2 (Red) - Starting at Left (Horizontal)
-% Note: We swap Width and Length for horizontal orientation!
-c2_x = 0;
-c2_y = center - (car_w/2);
+% Car 2 (Left)
+c2_x = 0; c2_y = center - (car_w/2);
 hCar2 = rectangle('Position', [c2_x, c2_y, car_l, car_w], ...
-                  'FaceColor', 'r', 'EdgeColor', 'none');
+                  'FaceColor', 'b', 'EdgeColor', 'none');
 
-% --- 3. Simulation Logic ---
-velocity = 5; 
+% --- 3. RANDOM START LOGIC ---
+% We set a "Danger Delay". 
+% 0.8 seconds is short enough that they WOULD crash if no one stopped,
+% but long enough that one is clearly ahead of the other.
+danger_delay = 0.8; 
+
+if rand > 0.5
+    % Case A: Bottom Car goes first
+    start_time_1 = 0;
+    start_time_2 = danger_delay;
+    title('Priority: Bottom Car (Vertical)', 'Color', 'w');
+else
+    % Case B: Left Car goes first
+    start_time_1 = danger_delay;
+    start_time_2 = 0;
+    title('Priority: Left Car (Horizontal)', 'Color', 'w');
+end
+
+% --- 4. Simulation Loop ---
+velocity = 15;
 dt = 0.05;
+sim_time = 0;
 
-% Define the stopping point for Car 1
-% It should stop a little bit before the intersection starts (int_start)
+% Stop Lines (Safety buffer before entering intersection)
 stop_line = int_start - car_l - 1; 
 
-% Loop until both cars are off screen
 while (c1_y < map_size) || (c2_x < map_size)
+    sim_time = sim_time + dt;
     
-    % --- Logic for Red Car (Left) ---
-    % The Red car has the "Right of Way", so it never stops.
-    c2_x = c2_x + (velocity * dt);
+    % --- COLLISION AVOIDANCE SENSORS ---
     
-    % --- Logic for Blue Car (Bottom) ---
-    % We need to decide: Should the Blue car move?
+    % Is the car physically occupying the intersection?
+    % (Position > Start AND Position < End + Safety Buffer)
+    c1_in_intersection = (c1_y > int_start - 1) && (c1_y < int_end + 2);
+    c2_in_intersection = (c2_x > int_start - 1) && (c2_x < int_end + 2);
     
-    % Condition A: Is the blue car at the stop line?
-    at_stop_line = (c1_y >= stop_line) && (c1_y < int_start);
-    
-    % Condition B: Has the red car cleared the intersection?
-    % (Red car position > Intersection End + safety margin)
-    red_car_clear = c2_x > (int_end + 1);
-    
-    if at_stop_line && ~red_car_clear
-        % DO NOTHING (Wait). 
-        % We do not increase c1_y here.
-    else
-        % Move normally
-        c1_y = c1_y + (velocity * dt);
+    % --- Move Car 1 (Vertical) ---
+    if sim_time > start_time_1
+        % Logic: If I am at the stop line AND the other car is in the way...
+        at_stop = (c1_y >= stop_line) && (c1_y < int_start);
+        
+        if at_stop && c2_in_intersection
+            % STOP! (Do not add velocity)
+        else
+            c1_y = c1_y + (velocity * dt);
+        end
     end
     
-    % --- Update Graphics ---
+    % --- Move Car 2 (Horizontal) ---
+    if sim_time > start_time_2
+        % Logic: If I am at the stop line AND the other car is in the way...
+        at_stop = (c2_x >= stop_line) && (c2_x < int_start);
+        
+        if at_stop && c1_in_intersection
+            % STOP! (Do not add velocity)
+        else
+            c2_x = c2_x + (velocity * dt);
+        end
+    end
+    
+    % Update Graphics
     hCar1.Position = [c1_x, c1_y, car_w, car_l];
-    hCar2.Position = [c2_x, c2_y, car_l, car_w]; % Remember horizontal dims
+    hCar2.Position = [c2_x, c2_y, car_l, car_w];
     
     drawnow;
     pause(dt);

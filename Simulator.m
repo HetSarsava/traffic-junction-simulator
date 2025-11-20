@@ -1,4 +1,4 @@
-function traffic_simulation_stats()
+function Simulator()
     % We wrap this in a function so the variables don't clutter your workspace
     
     hFig = figure('Color',[0 0 0], 'Name', 'Traffic Data Collection (Running 10 Loops...)');
@@ -64,7 +64,7 @@ function traffic_simulation_stats()
         c2_cfg = configs{p2_idx};
         c2_pos = [c2_cfg(1), c2_cfg(2)]; c2_dim = [c2_cfg(3), c2_cfg(4)]; c2_vel = [c2_cfg(5), c2_cfg(6)];
         
-        delay = 0.4 + (rand * 0.8);
+        delay = 0.4 + (rand * 0.7);
         sim_time = 0;
         
         if rand > 0.5, t1_start=0; t2_start=delay; else, t1_start=delay; t2_start=0; end

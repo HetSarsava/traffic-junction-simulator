@@ -43,7 +43,7 @@ function TwoWayTrafficSim()
         
         if spawn_timer > spawn_interval
             spawn_timer = 0; 
-            spawn_interval = 1.0 + rand; 
+            spawn_interval = 0.3 + (rand * 0.5);
             
             offset = lane_width / 2;
             

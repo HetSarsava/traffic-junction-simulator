@@ -1,6 +1,6 @@
-function LHT_Proximity_Traffic()
+function LHT_Proximity_Traffic_Entities()
     % 1. Setup Figure and Map
-    hFig = figure('Color',[0.2 0.2 0.2], 'Name', 'Tight Proximity Traffic (Hitbox Logic)');
+    hFig = figure('Color',[0.2 0.2 0.2], 'Name', 'Traffic Simulation: Real Entities');
     axis equal off;
     hold on;
     
@@ -11,10 +11,10 @@ function LHT_Proximity_Traffic()
                        'String', 'Spawn Interval: 1.0s', ...
                        'BackgroundColor', [0.2 0.2 0.2], 'ForegroundColor', 'w', ...
                        'FontSize', 10);
-                       
+                        
     % --- Map Constants ---
     map_size = 100;
-    road_width = 16;       
+    road_width = 16;        
     lane_offset = road_width / 4; 
     center = map_size / 2;
     int_min = center - road_width/2;
@@ -36,14 +36,14 @@ function LHT_Proximity_Traffic()
     % Curves
     r_short = (road_width/2) - lane_offset; 
     r_long  = (road_width/2) + lane_offset;
-    draw_arc([int_min, int_min], r_short, 0, pi/2, 'w:');     
-    draw_arc([int_max, int_min], r_short, pi/2, pi, 'w:');    
-    draw_arc([int_max, int_max], r_short, pi, 3*pi/2, 'w:');  
+    draw_arc([int_min, int_min], r_short, 0, pi/2, 'w:');      
+    draw_arc([int_max, int_min], r_short, pi/2, pi, 'w:');     
+    draw_arc([int_max, int_max], r_short, pi, 3*pi/2, 'w:');   
     draw_arc([int_min, int_max], r_short, 3*pi/2, 2*pi, 'w:');
-    draw_arc([int_max, int_min], r_long, pi/2, pi, 'w:');     
-    draw_arc([int_max, int_max], r_long, pi, 3*pi/2, 'w:');   
+    draw_arc([int_max, int_min], r_long, pi/2, pi, 'w:');      
+    draw_arc([int_max, int_max], r_long, pi, 3*pi/2, 'w:');    
     draw_arc([int_min, int_max], r_long, 3*pi/2, 2*pi, 'w:'); 
-    draw_arc([int_min, int_min], r_long, 0, pi/2, 'w:');      
+    draw_arc([int_min, int_min], r_long, 0, pi/2, 'w:');       
     
     % --- 2. Simulation Settings ---
     cars = struct('h', {}, 'pos', {}, 'angle', {}, 'type', {}, 'state', {}, ...
@@ -69,13 +69,13 @@ function LHT_Proximity_Traffic()
             
             pivot = [0,0]; radius = 0; turn_dir = 0; 
             switch spawn_dir
-                case 1, start_pos=[center-lane_offset, -6]; angle=pi/2; col=[0.4 0.6 1];
-                case 2, start_pos=[center+lane_offset, map_size+6]; angle=-pi/2; col=[1 0.4 0.4];
-                case 3, start_pos=[-6, center+lane_offset]; angle=0; col=[0.4 1 0.4];
-                case 4, start_pos=[map_size+6, center-lane_offset]; angle=pi; col=[1 1 0.4];
+                case 1, start_pos=[center-lane_offset, -6]; angle=pi/2; col=[0.2 0.4 0.9]; % Blue
+                case 2, start_pos=[center+lane_offset, map_size+6]; angle=-pi/2; col=[0.9 0.2 0.2]; % Red
+                case 3, start_pos=[-6, center+lane_offset]; angle=0; col=[0.2 0.8 0.2]; % Green
+                case 4, start_pos=[map_size+6, center-lane_offset]; angle=pi; col=[0.9 0.9 0.2]; % Yellow
             end
             
-            % Check clearance (Simple radius check for spawning is sufficient)
+            % Check clearance (Math Logic unchanged)
             spawn_clear = true;
             for k=1:length(cars)
                 if norm(cars(k).pos - start_pos) < 10, spawn_clear = false; break; end
@@ -96,10 +96,11 @@ function LHT_Proximity_Traffic()
                     elseif spawn_dir==4, pivot=[int_max, int_min]; turn_dir=1; end
                 end
                 
-                [px, py] = get_car_coords(start_pos, car_w, car_l, angle);
-                hNew = patch(px, py, col, 'EdgeColor', 'k');
+                % --- NEW VISUALIZATION: Create Entity Group ---
+                % Instead of a single patch, we create a transform group containing multiple parts
+                hGroup = create_complex_car(start_pos, angle, col, car_w, car_l);
                 
-                new_car = struct('h', hNew, 'pos', start_pos, 'angle', angle, ...
+                new_car = struct('h', hGroup, 'pos', start_pos, 'angle', angle, ...
                                  'type', m_type, 'state', 0, 'pivot', pivot, ...
                                  'radius', radius, 'start_theta', 0, 'turn_dir', turn_dir, ...
                                  'angle_covered', 0, 'speed', base_speed);
@@ -111,55 +112,42 @@ function LHT_Proximity_Traffic()
         for i = length(cars):-1:1
             c = cars(i);
             
-            % --- PRECISE HITBOX LOGIC ---
-            % 1. Calculate Future Position (Look ahead a small distance)
-            % 3 units ahead is enough to prevent clipping but keep it tight
+            % --- PRECISE HITBOX LOGIC (UNCHANGED) ---
+            % We keep the math logic exactly as it was, using a helper to calculate
+            % the invisible bounding box for collision detection.
             look_ahead = 3.0; 
             
-            if c.state == 1 % If turning, approximate tangent move
-                future_pos = c.pos + [cos(c.angle), sin(c.angle)] * look_ahead;
-            else
-                future_pos = c.pos + [cos(c.angle), sin(c.angle)] * look_ahead;
-            end
+            future_pos = c.pos + [cos(c.angle), sin(c.angle)] * look_ahead;
             
-            % 2. Get the Rectangles (Polygons)
-            % Future body of THIS car
-            [fx, fy] = get_car_coords(future_pos, car_w, car_l, c.angle);
+            % Get Invisible Hitbox (Future)
+            [fx, fy] = get_hitbox_coords(future_pos, car_w, car_l, c.angle);
             
             collision_detected = false;
             
-            % 3. Check against every other car's CURRENT body
+            % Check against every other car's CURRENT body
             for j = 1:length(cars)
                 if i == j, continue; end
                 other = cars(j);
                 
-                % Optimization: Don't check geometry if they are far away (>15 units)
                 if norm(c.pos - other.pos) > 15, continue; end
                 
-                % Get 'Other' car body
-                [ox, oy] = get_car_coords(other.pos, car_w, car_l, other.angle);
+                % Get 'Other' car invisible hitbox
+                [ox, oy] = get_hitbox_coords(other.pos, car_w, car_l, other.angle);
                 
-                % POLYGON CHECK: Is my future body inside their current body?
-                % We check if any corner of 'Future' is inside 'Other'
                 in = inpolygon(fx, fy, ox, oy);
-                
                 if any(in) 
-                    collision_detected = true;
-                    break;
+                    collision_detected = true; break;
                 end
                 
-                % Double Check: Is any corner of 'Other' inside 'Future'?
-                % (Handles T-bone scenarios better)
                 in2 = inpolygon(ox, oy, fx, fy);
                 if any(in2)
-                    collision_detected = true;
-                    break;
+                    collision_detected = true; break;
                 end
             end
             
             % --- EXECUTE MOVE ---
             if ~collision_detected
-                % Perform Movement (Same Rail Logic as before)
+                % Perform Movement (Rail Logic - UNCHANGED)
                 if c.state == 0
                     c.pos = c.pos + [cos(c.angle), sin(c.angle)] * c.speed * dt;
                     if c.type > 0
@@ -184,14 +172,16 @@ function LHT_Proximity_Traffic()
                     c.pos = c.pos + [cos(c.angle), sin(c.angle)] * c.speed * dt;
                 end
                 
-                % Update Graphics
-                [px, py] = get_car_coords(c.pos, car_w, car_l, c.angle);
-                set(c.h, 'XData', px, 'YData', py);
+                % --- NEW UPDATE LOGIC: Matrix Transform ---
+                % Instead of redrawing vertices, we just move the Entity Group
+                M = makehgtform('translate', [c.pos(1) c.pos(2) 0], 'zrotate', c.angle);
+                set(c.h, 'Matrix', M);
             end
             
             % Cleanup
             if c.pos(1)<-10 || c.pos(1)>map_size+10 || c.pos(2)<-10 || c.pos(2)>map_size+10
-                delete(c.h); cars(i) = [];
+                delete(c.h); % Deletes the whole group
+                cars(i) = [];
             else
                 cars(i) = c;
             end
@@ -200,12 +190,50 @@ function LHT_Proximity_Traffic()
     end
 end
 
-% --- Helper Functions ---
-function [x, y] = get_car_coords(pos, w, l, angle)
+% --- VISUAL HELPER: Creates the "Real Entity" ---
+function hGroup = create_complex_car(pos, angle, color, w, l)
+    % Create a transform group that acts as the container for the car
+    hGroup = hgtransform;
+    
+    % Define the car parts RELATIVE to (0,0) - Local Coordinates
+    
+    % 1. Main Chassis (The painted body)
+    fill([-l/2, l/2, l/2, -l/2], [-w/2, -w/2, w/2, w/2], color, ...
+        'EdgeColor', 'k', 'Parent', hGroup);
+    
+    % 2. Roof/Cabin (Darker rectangle in the middle)
+    rl = l * 0.5; rw = w * 0.8;
+    fill([-rl/2, rl/2, rl/2, -rl/2], [-rw/2, -rw/2, rw/2, rw/2], [0.1 0.1 0.1], ...
+        'EdgeColor', 'none', 'Parent', hGroup);
+        
+    % 3. Windshield (Light blue rect slightly offset forward)
+    wl = l * 0.15; ww = w * 0.7;
+    fill([rl/2, rl/2+wl, rl/2+wl, rl/2], [-ww/2, -ww/2, ww/2, ww/2], [0.6 0.8 1], ...
+        'EdgeColor', 'none', 'Parent', hGroup);
+        
+    % 4. Headlights (Yellow circles/rects at front)
+    hl = l * 0.1; hw = w * 0.2;
+    % Left Headlight
+    fill([l/2-hl, l/2, l/2, l/2-hl], [w/2-hw, w/2-hw, w/2, w/2], [1 1 0], ...
+        'EdgeColor', 'none', 'Parent', hGroup);
+    % Right Headlight
+    fill([l/2-hl, l/2, l/2, l/2-hl], [-w/2, -w/2, -w/2+hw, -w/2+hw], [1 1 0], ...
+        'EdgeColor', 'none', 'Parent', hGroup);
+
+    % Apply Initial Position/Rotation
+    M = makehgtform('translate', [pos(1) pos(2) 0], 'zrotate', angle);
+    set(hGroup, 'Matrix', M);
+end
+
+% --- MATH HELPER: Calculates Invisible Hitbox ---
+function [x, y] = get_hitbox_coords(pos, w, l, angle)
+    % This is the exact math from your previous get_car_coords function
+    % We use this for collision detection, but NOT for drawing.
     bx = [-l/2, l/2, l/2, -l/2]; by = [-w/2, -w/2, w/2, w/2];
     Rx = bx*cos(angle) - by*sin(angle); Ry = bx*sin(angle) + by*cos(angle);
     x = Rx + pos(1); y = Ry + pos(2);
 end
+
 function draw_arc(center, radius, s, e, style)
     t = linspace(s, e, 20); plot(center(1)+radius*cos(t), center(2)+radius*sin(t), style, 'Color', [0.6 0.6 0.6]);
 end

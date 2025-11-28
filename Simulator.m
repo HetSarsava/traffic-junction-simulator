@@ -1,152 +1,132 @@
-function LHT_TankTurnTraffic()
+function LHT_SmoothTraffic_Fixed()
     % 1. Setup Figure and Map
-    hFig = figure('Color',[0.2 0.2 0.2], 'Name', 'Left-Hand Traffic (LHT) Simulation');
+    hFig = figure('Color',[0.2 0.2 0.2], 'Name', 'LHT Smooth Traffic (Fixed)');
     axis equal off;
     hold on;
     
     % --- Map Constants ---
     map_size = 100;
     road_width = 16;       
-    lane_offset = road_width / 4; % Distance from center to lane middle
+    lane_offset = road_width / 4; 
     center = map_size / 2;
+    
+    % Intersection Boundaries
+    int_min = center - road_width/2;
+    int_max = center + road_width/2;
     
     xlim([0 map_size]);
     ylim([0 map_size]);
     
-    % --- Draw Roads ---
-    fill([center-road_width/2, center+road_width/2, center+road_width/2, center-road_width/2], ...
+    % --- Draw Base Roads ---
+    fill([int_min, int_max, int_max, int_min], ...
          [0, 0, map_size, map_size], [0.3 0.3 0.3], 'EdgeColor', 'none');
     fill([0, map_size, map_size, 0], ...
-         [center-road_width/2, center-road_width/2, center+road_width/2, center+road_width/2], ...
+         [int_min, int_min, int_max, int_max], ...
          [0.3 0.3 0.3], 'EdgeColor', 'none');
 
-    % --- Visual Guides for LHT ---
-    plot(center, center, 'w+', 'MarkerSize', 10);
+    % --- Draw Visual Guides (Tracks) ---
+    % 1. STRAIGHT LINES (Restored)
+    % Vertical Left (S -> N)
+    plot([center-lane_offset center-lane_offset], [0 map_size], 'w:', 'LineWidth', 1, 'Color', [0.6 0.6 0.6]);
+    % Vertical Right (N -> S)
+    plot([center+lane_offset center+lane_offset], [0 map_size], 'w:', 'LineWidth', 1, 'Color', [0.6 0.6 0.6]);
+    % Horizontal Top (W -> E)
+    plot([0 map_size], [center+lane_offset center+lane_offset], 'w:', 'LineWidth', 1, 'Color', [0.6 0.6 0.6]);
+    % Horizontal Bottom (E -> W)
+    plot([0 map_size], [center-lane_offset center-lane_offset], 'w:', 'LineWidth', 1, 'Color', [0.6 0.6 0.6]);
+
+    % 2. CURVED LINES
+    r_short = (road_width/2) - lane_offset; % Left Turn
+    r_long  = (road_width/2) + lane_offset; % Right Turn
     
-    % Draw Lane Centers (The paths cars MUST follow)
-    % Vertical Roads: Left is valid
-    % Upbound (North): Left of center line -> X = Center - Offset
-    plot([center-lane_offset center-lane_offset], [0 map_size], 'w:', 'Color', [0.6 0.6 0.6]);
-    % Downbound (South): Left of center line -> X = Center + Offset
-    plot([center+lane_offset center+lane_offset], [0 map_size], 'w:', 'Color', [0.6 0.6 0.6]);
+    % Draw the 4 Short Turns (Left)
+    draw_arc([int_min, int_min], r_short, 0, pi/2, 'w:');     
+    draw_arc([int_max, int_min], r_short, pi/2, pi, 'w:');    
+    draw_arc([int_max, int_max], r_short, pi, 3*pi/2, 'w:');  
+    draw_arc([int_min, int_max], r_short, 3*pi/2, 2*pi, 'w:');
     
-    % Horizontal Roads: Left is valid
-    % Rightbound (East): Left of center line -> Y = Center + Offset (Top Lane)
-    plot([0 map_size], [center+lane_offset center+lane_offset], 'w:', 'Color', [0.6 0.6 0.6]);
-    % Leftbound (West): Left of center line -> Y = Center - Offset (Bottom Lane)
-    plot([0 map_size], [center-lane_offset center-lane_offset], 'w:', 'Color', [0.6 0.6 0.6]);
+    % Draw the 4 Long Turns (Right)
+    draw_arc([int_max, int_min], r_long, pi/2, pi, 'w:');     
+    draw_arc([int_max, int_max], r_long, pi, 3*pi/2, 'w:');   
+    draw_arc([int_min, int_max], r_long, 3*pi/2, 2*pi, 'w:'); 
+    draw_arc([int_min, int_min], r_long, 0, pi/2, 'w:');      
     
     % --- 2. Simulation Settings ---
+    % state: 0=Approach, 1=InCurve, 2=Exit
+    % angle_covered: Tracks progress from 0 to pi/2
     cars = struct('h', {}, 'pos', {}, 'angle', {}, 'type', {}, 'state', {}, ...
-                  'turn_point', {}, 'target_angle', {}, 'turn_dir', {}, 'speed', {}); 
+                  'pivot', {}, 'radius', {}, 'start_theta', {}, 'turn_dir', {}, ...
+                  'angle_covered', {}, 'speed', {}); 
     
-    car_w = 4; 
-    car_l = 6;
-    travel_speed = 25;
-    rotation_speed = pi * 1.5; 
+    car_w = 4; car_l = 6;
+    speed_val = 25;
     dt = 0.04;
-    
     spawn_timer = 0;
     spawn_interval = 1.0; 
-    
-    fprintf('Simulation: Left-Hand Traffic Rules Active.\n');
     
     % --- 3. Main Loop ---
     while ishandle(hFig)
         spawn_timer = spawn_timer + dt;
         
+        % --- A. Spawner ---
         if spawn_timer > spawn_interval
             spawn_timer = 0; 
             spawn_interval = 0.8 + rand; 
+            spawn_dir = randi(4); 
             
-            % 1=From South (Going Up), 2=From North (Going Down)
-            % 3=From West (Going Right), 4=From East (Going Left)
-            spawn_dir = randi(4);
-            
-            % Movement: 40% Straight, 30% Right, 30% Left
+            % 0=Straight, 1=Right(Long), 2=Left(Short)
             r = rand;
-            if r < 0.4, m_type = 0;      % Straight
-            elseif r < 0.7, m_type = 1;  % Right Turn
-            else, m_type = 2;            % Left Turn
-            end
+            if r < 0.4, m_type = 0; elseif r < 0.7, m_type = 1; else, m_type = 2; end
             
-            % --- DEFINE SPAWNS (LHT RULES) ---
+            pivot = [0,0]; radius = 0; turn_dir = 0; % +1 CCW, -1 CW
+            
             switch spawn_dir
-                case 1 % From Bottom (Going North) -> Must be on LEFT side (x < center)
+                case 1 % From South (Going North)
                     start_pos = [center - lane_offset, -6];
-                    angle = pi/2; 
-                    col = [0.4 0.6 1]; % Blue
-                case 2 % From Top (Going South) -> Must be on LEFT side (x > center)
+                    angle = pi/2; col = [0.4 0.6 1];
+                case 2 % From North (Going South)
                     start_pos = [center + lane_offset, map_size+6];
-                    angle = -pi/2; 
-                    col = [1 0.4 0.4]; % Red
-                case 3 % From Left (Going East) -> Must be on LEFT side (y > center / Top Lane)
+                    angle = -pi/2; col = [1 0.4 0.4];
+                case 3 % From West (Going East)
                     start_pos = [-6, center + lane_offset];
-                    angle = 0; 
-                    col = [0.4 1 0.4]; % Green
-                case 4 % From Right (Going West) -> Must be on LEFT side (y < center / Bottom Lane)
+                    angle = 0; col = [0.4 1 0.4];
+                case 4 % From East (Going West)
                     start_pos = [map_size+6, center - lane_offset];
-                    angle = pi; 
-                    col = [1 1 0.4]; % Yellow
+                    angle = pi; col = [1 1 0.4];
             end
             
-            % --- CALCULATE TURN LOGIC ---
-            turn_point = [0,0];
-            target_angle = angle;
-            turn_dir = 0;
-            
-            if m_type == 1 % Right Turn
-                target_angle = angle - pi/2;
-                turn_dir = -1;
-                
-                % LHT Right Turn: This is the "Long Turn" (Crosses traffic)
-                % We intersect the current lane with the target lane
-                if spawn_dir==1 % North -> East (Top Lane)
-                    turn_point=[center-lane_offset, center+lane_offset]; 
+            % Define Turn Geometry based on LHT
+            if m_type == 1 % Right Turn (Wide, CW or CCW depends on corner)
+                radius = r_long;
+                if spawn_dir==1 % S->E (Pivot is SE corner)
+                    pivot = [int_max, int_min]; turn_dir = -1; % CW
+                elseif spawn_dir==2 % N->W (Pivot NW corner)
+                    pivot = [int_min, int_max]; turn_dir = -1; % CW
+                elseif spawn_dir==3 % W->S (Pivot SW corner)
+                    pivot = [int_min, int_min]; turn_dir = -1; % CW
+                elseif spawn_dir==4 % E->N (Pivot NE corner)
+                    pivot = [int_max, int_max]; turn_dir = -1; % CW
                 end
-                if spawn_dir==2 % South -> West (Bottom Lane)
-                    turn_point=[center+lane_offset, center-lane_offset]; 
-                end
-                if spawn_dir==3 % East -> South (Right Lane)
-                    turn_point=[center+lane_offset, center+lane_offset]; 
-                end
-                if spawn_dir==4 % West -> North (Left Lane)
-                    turn_point=[center-lane_offset, center-lane_offset]; 
-                end
-                
-            elseif m_type == 2 % Left Turn
-                target_angle = angle + pi/2;
-                turn_dir = 1;
-                
-                % LHT Left Turn: This is the "Short Turn" (Stays in near corner)
-                if spawn_dir==1 % North -> West (Bottom Lane)
-                    turn_point=[center-lane_offset, center-lane_offset]; 
-                end
-                if spawn_dir==2 % South -> East (Top Lane)
-                    turn_point=[center+lane_offset, center+lane_offset]; 
-                end
-                if spawn_dir==3 % East -> North (Left Lane)
-                    turn_point=[center-lane_offset, center+lane_offset]; 
-                end
-                if spawn_dir==4 % West -> South (Right Lane)
-                    turn_point=[center+lane_offset, center-lane_offset]; 
+            elseif m_type == 2 % Left Turn (Tight)
+                radius = r_short;
+                if spawn_dir==1 % S->W (Pivot SW corner)
+                    pivot = [int_min, int_min]; turn_dir = 1; % CCW
+                elseif spawn_dir==2 % N->E (Pivot NE corner)
+                    pivot = [int_max, int_max]; turn_dir = 1; % CCW
+                elseif spawn_dir==3 % W->N (Pivot NW corner)
+                    pivot = [int_min, int_max]; turn_dir = 1; % CCW
+                elseif spawn_dir==4 % E->S (Pivot SE corner)
+                    pivot = [int_max, int_min]; turn_dir = 1; % CCW
                 end
             end
             
-            % Create Graphic
             [px, py] = get_car_coords(start_pos, car_w, car_l, angle);
-            hNew = patch(px, py, col, 'EdgeColor', 'k', 'LineWidth', 1.5);
+            hNew = patch(px, py, col, 'EdgeColor', 'k');
             
-            new_car.h = hNew;
-            new_car.pos = start_pos;
-            new_car.angle = angle;
-            new_car.type = m_type;
-            new_car.state = 0; 
-            new_car.turn_point = turn_point;
-            new_car.target_angle = target_angle;
-            new_car.turn_dir = turn_dir;
-            new_car.speed = travel_speed;
-            
+            new_car = struct('h', hNew, 'pos', start_pos, 'angle', angle, ...
+                             'type', m_type, 'state', 0, 'pivot', pivot, ...
+                             'radius', radius, 'start_theta', 0, 'turn_dir', turn_dir, ...
+                             'angle_covered', 0, 'speed', speed_val);
             cars(end+1) = new_car;
         end
         
@@ -154,66 +134,90 @@ function LHT_TankTurnTraffic()
         for i = length(cars):-1:1
             c = cars(i);
             
-            % STATE 0: APPROACHING
+            % STATE 0: APPROACH
             if c.state == 0
-                if c.type == 0 % Straight
-                    c.pos(1) = c.pos(1) + cos(c.angle) * c.speed * dt;
-                    c.pos(2) = c.pos(2) + sin(c.angle) * c.speed * dt;
-                else
-                    % Check distance to Turn Point
-                    dist = norm(c.pos - c.turn_point);
-                    if dist < (c.speed * dt * 1.5)
-                        c.pos = c.turn_point; % SNAP
-                        c.state = 1; % ROTATE
-                    else
-                        c.pos(1) = c.pos(1) + cos(c.angle) * c.speed * dt;
-                        c.pos(2) = c.pos(2) + sin(c.angle) * c.speed * dt;
+                c.pos = c.pos + [cos(c.angle), sin(c.angle)] * c.speed * dt;
+                
+                % If turning, check for intersection entry
+                if c.type > 0
+                    dist_to_pivot = norm(c.pos - c.pivot);
+                    err = abs(dist_to_pivot - c.radius);
+                    
+                    % If we hit the virtual "rail"
+                    if err < 1.5 && ...
+                       c.pos(1) > int_min && c.pos(1) < int_max && ...
+                       c.pos(2) > int_min && c.pos(2) < int_max
+                        
+                       c.state = 1;
+                       % Calculate exact angle on circle at entry
+                       c.start_theta = atan2(c.pos(2)-c.pivot(2), c.pos(1)-c.pivot(1));
+                       c.angle_covered = 0; % Reset counter
                     end
                 end
                 
-            % STATE 1: ROTATING
+            % STATE 1: SMOOTH CURVE
             elseif c.state == 1
-                c.angle = c.angle + (rotation_speed * dt * c.turn_dir);
-                diff = abs(angdiff(c.angle, c.target_angle));
-                if diff < 0.1
-                    c.angle = c.target_angle; 
-                    c.state = 2; 
+                % 1. Calculate how much angle we change in this frame
+                % w = v / r
+                ang_step = (c.speed / c.radius) * dt;
+                
+                % 2. Accumulate total progress (always positive counter)
+                c.angle_covered = c.angle_covered + ang_step;
+                
+                % 3. Calculate actual current theta
+                current_theta = c.start_theta + (c.angle_covered * c.turn_dir);
+                
+                % 4. Update Position
+                c.pos(1) = c.pivot(1) + c.radius * cos(current_theta);
+                c.pos(2) = c.pivot(2) + c.radius * sin(current_theta);
+                
+                % 5. Update Heading (Tangent)
+                % Tangent is perpendicular (+/- 90deg) to the radius
+                if c.turn_dir == 1 % CCW
+                    c.angle = current_theta + pi/2;
+                else % CW
+                    c.angle = current_theta - pi/2;
                 end
                 
-            % STATE 2: EXITING
+                % 6. Check for Exit (Have we turned 90 degrees?)
+                if c.angle_covered >= (pi/2 - 0.05)
+                    c.state = 2;
+                    % Snap to perfect 90-degree heading
+                    c.angle = round(c.angle / (pi/2)) * (pi/2);
+                end
+                
+            % STATE 2: EXIT
             elseif c.state == 2
-                c.pos(1) = c.pos(1) + cos(c.angle) * c.speed * dt;
-                c.pos(2) = c.pos(2) + sin(c.angle) * c.speed * dt;
+                c.pos = c.pos + [cos(c.angle), sin(c.angle)] * c.speed * dt;
             end
             
-            % Update Graphics
+            % Update GFX
             [px, py] = get_car_coords(c.pos, car_w, car_l, c.angle);
             set(c.h, 'XData', px, 'YData', py);
             
             % Cleanup
-            if c.pos(1) < -10 || c.pos(1) > map_size+10 || c.pos(2) < -10 || c.pos(2) > map_size+10
-                delete(c.h);
-                cars(i) = [];
+            if c.pos(1)<-10 || c.pos(1)>map_size+10 || c.pos(2)<-10 || c.pos(2)>map_size+10
+                delete(c.h); cars(i) = [];
             else
                 cars(i) = c;
             end
         end
-        
-        drawnow;
-        pause(dt);
+        drawnow; pause(dt);
     end
 end
 
+% --- Helpers ---
 function [x, y] = get_car_coords(pos, w, l, angle)
     bx = [-l/2, l/2, l/2, -l/2];
     by = [-w/2, -w/2, w/2, w/2];
-    Rx = bx * cos(angle) - by * sin(angle);
-    Ry = bx * sin(angle) + by * cos(angle);
-    x = Rx + pos(1);
-    y = Ry + pos(2);
+    Rx = bx*cos(angle) - by*sin(angle);
+    Ry = bx*sin(angle) + by*cos(angle);
+    x = Rx + pos(1); y = Ry + pos(2);
 end
 
-function d = angdiff(a, b)
-    d = a - b;
-    d = mod(d + pi, 2*pi) - pi;
+function draw_arc(center, radius, start_ang, end_ang, style)
+    t = linspace(start_ang, end_ang, 20);
+    x = center(1) + radius*cos(t);
+    y = center(2) + radius*sin(t);
+    plot(x, y, style, 'LineWidth', 1, 'Color', [0.6 0.6 0.6]);
 end

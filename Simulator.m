@@ -1,11 +1,10 @@
-function LHT_Traffic_With_Slider()
+function LHT_Proximity_Traffic()
     % 1. Setup Figure and Map
-    hFig = figure('Color',[0.2 0.2 0.2], 'Name', 'LHT Traffic (Use Slider to Control Spawn)');
+    hFig = figure('Color',[0.2 0.2 0.2], 'Name', 'Tight Proximity Traffic (Hitbox Logic)');
     axis equal off;
     hold on;
     
-    % --- UI CONTROLS (THE SLIDER) ---
-    % Slider range: 0.2s (Fast) to 3.0s (Slow)
+    % --- UI SLIDER ---
     hSlider = uicontrol('Style', 'slider', 'Min', 0.2, 'Max', 3.0, 'Value', 1.0, ...
                         'Position', [150 20 300 20]);
     hLabel = uicontrol('Style', 'text', 'Position', [150 45 300 20], ...
@@ -27,13 +26,13 @@ function LHT_Traffic_With_Slider()
     fill([int_min, int_max, int_max, int_min], [0, 0, map_size, map_size], [0.3 0.3 0.3], 'EdgeColor', 'none');
     fill([0, map_size, map_size, 0], [int_min, int_min, int_max, int_max], [0.3 0.3 0.3], 'EdgeColor', 'none');
 
-    % --- Draw Guides ---
+    % --- Visual Guides ---
     % Straight Lines
     plot([center-lane_offset center-lane_offset], [0 map_size], 'w:', 'LineWidth',1, 'Color',[0.5 0.5 0.5]);
     plot([center+lane_offset center+lane_offset], [0 map_size], 'w:', 'LineWidth',1, 'Color',[0.5 0.5 0.5]);
     plot([0 map_size], [center+lane_offset center+lane_offset], 'w:', 'LineWidth',1, 'Color',[0.5 0.5 0.5]);
     plot([0 map_size], [center-lane_offset center-lane_offset], 'w:', 'LineWidth',1, 'Color',[0.5 0.5 0.5]);
-
+    
     % Curves
     r_short = (road_width/2) - lane_offset; 
     r_long  = (road_width/2) + lane_offset;
@@ -52,28 +51,23 @@ function LHT_Traffic_With_Slider()
                   'angle_covered', {}, 'speed', {}); 
     
     car_w = 4; car_l = 6;
-    speed_val = 25;
+    base_speed = 25;
     dt = 0.04;
     spawn_timer = 0;
     
     % --- 3. Main Loop ---
     while ishandle(hFig)
         spawn_timer = spawn_timer + dt;
-        
-        % READ SLIDER VALUE
         current_interval = get(hSlider, 'Value');
         set(hLabel, 'String', sprintf('Spawn Interval: %.2fs', current_interval));
         
         % --- A. Spawner ---
         if spawn_timer > current_interval
             spawn_timer = 0; 
-            
             spawn_dir = randi(4); 
-            r = rand;
-            if r < 0.4, m_type = 0; elseif r < 0.7, m_type = 1; else, m_type = 2; end
+            r = rand; if r < 0.4, m_type = 0; elseif r < 0.7, m_type = 1; else, m_type = 2; end
             
             pivot = [0,0]; radius = 0; turn_dir = 0; 
-            
             switch spawn_dir
                 case 1, start_pos=[center-lane_offset, -6]; angle=pi/2; col=[0.4 0.6 1];
                 case 2, start_pos=[center+lane_offset, map_size+6]; angle=-pi/2; col=[1 0.4 0.4];
@@ -81,58 +75,121 @@ function LHT_Traffic_With_Slider()
                 case 4, start_pos=[map_size+6, center-lane_offset]; angle=pi; col=[1 1 0.4];
             end
             
-            if m_type == 1 % Right Turn
-                radius = r_long;
-                if spawn_dir==1, pivot=[int_max, int_min]; turn_dir=-1;
-                elseif spawn_dir==2, pivot=[int_min, int_max]; turn_dir=-1;
-                elseif spawn_dir==3, pivot=[int_min, int_min]; turn_dir=-1;
-                elseif spawn_dir==4, pivot=[int_max, int_max]; turn_dir=-1; end
-            elseif m_type == 2 % Left Turn
-                radius = r_short;
-                if spawn_dir==1, pivot=[int_min, int_min]; turn_dir=1;
-                elseif spawn_dir==2, pivot=[int_max, int_max]; turn_dir=1;
-                elseif spawn_dir==3, pivot=[int_min, int_max]; turn_dir=1;
-                elseif spawn_dir==4, pivot=[int_max, int_min]; turn_dir=1; end
+            % Check clearance (Simple radius check for spawning is sufficient)
+            spawn_clear = true;
+            for k=1:length(cars)
+                if norm(cars(k).pos - start_pos) < 10, spawn_clear = false; break; end
             end
             
-            [px, py] = get_car_coords(start_pos, car_w, car_l, angle);
-            hNew = patch(px, py, col, 'EdgeColor', 'k');
-            
-            new_car = struct('h', hNew, 'pos', start_pos, 'angle', angle, ...
-                             'type', m_type, 'state', 0, 'pivot', pivot, ...
-                             'radius', radius, 'start_theta', 0, 'turn_dir', turn_dir, ...
-                             'angle_covered', 0, 'speed', speed_val);
-            cars(end+1) = new_car;
+            if spawn_clear
+                if m_type == 1 % Right Turn
+                    radius = r_long;
+                    if spawn_dir==1, pivot=[int_max, int_min]; turn_dir=-1;
+                    elseif spawn_dir==2, pivot=[int_min, int_max]; turn_dir=-1;
+                    elseif spawn_dir==3, pivot=[int_min, int_min]; turn_dir=-1;
+                    elseif spawn_dir==4, pivot=[int_max, int_max]; turn_dir=-1; end
+                elseif m_type == 2 % Left Turn
+                    radius = r_short;
+                    if spawn_dir==1, pivot=[int_min, int_min]; turn_dir=1;
+                    elseif spawn_dir==2, pivot=[int_max, int_max]; turn_dir=1;
+                    elseif spawn_dir==3, pivot=[int_min, int_max]; turn_dir=1;
+                    elseif spawn_dir==4, pivot=[int_max, int_min]; turn_dir=1; end
+                end
+                
+                [px, py] = get_car_coords(start_pos, car_w, car_l, angle);
+                hNew = patch(px, py, col, 'EdgeColor', 'k');
+                
+                new_car = struct('h', hNew, 'pos', start_pos, 'angle', angle, ...
+                                 'type', m_type, 'state', 0, 'pivot', pivot, ...
+                                 'radius', radius, 'start_theta', 0, 'turn_dir', turn_dir, ...
+                                 'angle_covered', 0, 'speed', base_speed);
+                cars(end+1) = new_car;
+            end
         end
         
         % --- B. Movement Loop ---
         for i = length(cars):-1:1
             c = cars(i);
-            if c.state == 0
-                c.pos = c.pos + [cos(c.angle), sin(c.angle)] * c.speed * dt;
-                if c.type > 0
-                    dist = norm(c.pos - c.pivot);
-                    if abs(dist - c.radius) < 1.5 && ...
-                       c.pos(1)>int_min && c.pos(1)<int_max && c.pos(2)>int_min && c.pos(2)<int_max
-                       c.state = 1;
-                       c.start_theta = atan2(c.pos(2)-c.pivot(2), c.pos(1)-c.pivot(1));
-                       c.angle_covered = 0;
-                    end
-                end
-            elseif c.state == 1
-                c.angle_covered = c.angle_covered + (c.speed / c.radius) * dt;
-                curr_theta = c.start_theta + (c.angle_covered * c.turn_dir);
-                c.pos = c.pivot + c.radius * [cos(curr_theta), sin(curr_theta)];
-                if c.turn_dir == 1, c.angle = curr_theta + pi/2; else, c.angle = curr_theta - pi/2; end
-                if c.angle_covered >= (pi/2 - 0.05)
-                    c.state = 2;
-                    c.angle = round(c.angle / (pi/2)) * (pi/2);
-                end
-            elseif c.state == 2
-                c.pos = c.pos + [cos(c.angle), sin(c.angle)] * c.speed * dt;
+            
+            % --- PRECISE HITBOX LOGIC ---
+            % 1. Calculate Future Position (Look ahead a small distance)
+            % 3 units ahead is enough to prevent clipping but keep it tight
+            look_ahead = 3.0; 
+            
+            if c.state == 1 % If turning, approximate tangent move
+                future_pos = c.pos + [cos(c.angle), sin(c.angle)] * look_ahead;
+            else
+                future_pos = c.pos + [cos(c.angle), sin(c.angle)] * look_ahead;
             end
-            [px, py] = get_car_coords(c.pos, car_w, car_l, c.angle);
-            set(c.h, 'XData', px, 'YData', py);
+            
+            % 2. Get the Rectangles (Polygons)
+            % Future body of THIS car
+            [fx, fy] = get_car_coords(future_pos, car_w, car_l, c.angle);
+            
+            collision_detected = false;
+            
+            % 3. Check against every other car's CURRENT body
+            for j = 1:length(cars)
+                if i == j, continue; end
+                other = cars(j);
+                
+                % Optimization: Don't check geometry if they are far away (>15 units)
+                if norm(c.pos - other.pos) > 15, continue; end
+                
+                % Get 'Other' car body
+                [ox, oy] = get_car_coords(other.pos, car_w, car_l, other.angle);
+                
+                % POLYGON CHECK: Is my future body inside their current body?
+                % We check if any corner of 'Future' is inside 'Other'
+                in = inpolygon(fx, fy, ox, oy);
+                
+                if any(in) 
+                    collision_detected = true;
+                    break;
+                end
+                
+                % Double Check: Is any corner of 'Other' inside 'Future'?
+                % (Handles T-bone scenarios better)
+                in2 = inpolygon(ox, oy, fx, fy);
+                if any(in2)
+                    collision_detected = true;
+                    break;
+                end
+            end
+            
+            % --- EXECUTE MOVE ---
+            if ~collision_detected
+                % Perform Movement (Same Rail Logic as before)
+                if c.state == 0
+                    c.pos = c.pos + [cos(c.angle), sin(c.angle)] * c.speed * dt;
+                    if c.type > 0
+                        dist = norm(c.pos - c.pivot);
+                        if abs(dist - c.radius) < 1.5 && ...
+                           c.pos(1)>int_min && c.pos(1)<int_max && c.pos(2)>int_min && c.pos(2)<int_max
+                           c.state = 1;
+                           c.start_theta = atan2(c.pos(2)-c.pivot(2), c.pos(1)-c.pivot(1));
+                           c.angle_covered = 0;
+                        end
+                    end
+                elseif c.state == 1
+                    c.angle_covered = c.angle_covered + (c.speed / c.radius) * dt;
+                    curr_theta = c.start_theta + (c.angle_covered * c.turn_dir);
+                    c.pos = c.pivot + c.radius * [cos(curr_theta), sin(curr_theta)];
+                    if c.turn_dir == 1, c.angle = curr_theta + pi/2; else, c.angle = curr_theta - pi/2; end
+                    if c.angle_covered >= (pi/2 - 0.05)
+                        c.state = 2;
+                        c.angle = round(c.angle / (pi/2)) * (pi/2);
+                    end
+                elseif c.state == 2
+                    c.pos = c.pos + [cos(c.angle), sin(c.angle)] * c.speed * dt;
+                end
+                
+                % Update Graphics
+                [px, py] = get_car_coords(c.pos, car_w, car_l, c.angle);
+                set(c.h, 'XData', px, 'YData', py);
+            end
+            
+            % Cleanup
             if c.pos(1)<-10 || c.pos(1)>map_size+10 || c.pos(2)<-10 || c.pos(2)>map_size+10
                 delete(c.h); cars(i) = [];
             else
@@ -143,6 +200,7 @@ function LHT_Traffic_With_Slider()
     end
 end
 
+% --- Helper Functions ---
 function [x, y] = get_car_coords(pos, w, l, angle)
     bx = [-l/2, l/2, l/2, -l/2]; by = [-w/2, -w/2, w/2, w/2];
     Rx = bx*cos(angle) - by*sin(angle); Ry = bx*sin(angle) + by*cos(angle);

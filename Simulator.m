@@ -1,6 +1,6 @@
-function LHT_JustInTime_Traffic()
+function LHT_Multi_Intention_Traffic()
     % 1. Setup Figure
-    hFig = figure('Color',[0.15 0.15 0.15], 'Name', 'Just-In-Time Logic');
+    hFig = figure('Color',[0.15 0.15 0.15], 'Name', 'Multi-Intention Logic');
     axis equal off; hold on;
     
     % --- UI SLIDER ---
@@ -23,17 +23,17 @@ function LHT_JustInTime_Traffic()
     Junction.lane_offset = road_width / 4;
     Junction.active = active_dirs; 
     half_w = road_width / 2;
-    % Bounds: [x_min, x_max, y_min, y_max]
     Junction.bounds = [center - half_w, center + half_w, center - half_w, center + half_w];
     
     xlim([0 map_size]); ylim([0 map_size]);
     draw_smart_junction(Junction, map_size);
 
     % --- 3. Simulation Settings ---
-    % Note: cars struct is simpler now. It doesn't need pivot/radius at spawn.
-    cars = struct('h', {}, 'hPivot', {}, 'pos', {}, 'angle', {}, 'intention', {}, 'state', {}, ...
-                  'pivot', {}, 'radius', {}, 'start_theta', {}, 'turn_dir', {}, ...
-                  'angle_covered', {}, 'speed', {}); 
+    % UPDATED STRUCT: 'intention' is now a list, added 'intention_idx'
+    cars = struct('h', {}, 'hPivot', {}, 'pos', {}, 'angle', {}, ...
+                  'intention', {}, 'intention_idx', {}, ... 
+                  'state', {}, 'pivot', {}, 'radius', {}, 'start_theta', {}, ...
+                  'turn_dir', {}, 'angle_covered', {}, 'speed', {}); 
     
     car_w = 4; car_l = 6;
     base_speed = 25;
@@ -46,11 +46,11 @@ function LHT_JustInTime_Traffic()
         current_interval = get(hSlider, 'Value');
         set(hLabel, 'String', sprintf('Spawn Interval: %.2fs', current_interval));
         
-        % --- A. Dumb Spawner (Only Intention, No Math) ---
+        % --- A. Spawner ---
         if spawn_timer > current_interval
             spawn_timer = 0; 
             
-            % 1. Pick a Start Location
+            % 1. Pick Start Location
             valid_spawns = [];
             if Junction.active(3), valid_spawns(end+1) = 1; end % S
             if Junction.active(1), valid_spawns(end+1) = 2; end % N
@@ -68,11 +68,14 @@ function LHT_JustInTime_Traffic()
                     case 4, start_pos=[map_size+6, center-Junction.lane_offset]; angle=pi; col=[0.9 0.9 0.3];
                 end
                 
-                % 2. Pick an Intention (0=Straight, 1=Right, 2=Left)
-                r = rand; 
-                if r < 0.4, intention = 0; 
-                elseif r < 0.7, intention = 1; 
-                else, intention = 2; 
+                % 2. GENERATE INTENTION LIST (Size 10)
+                intention_list = zeros(1, 10);
+                for k = 1:10
+                    r = rand; 
+                    if r < 0.4, intention_list(k) = 0; % Straight
+                    elseif r < 0.7, intention_list(k) = 1; % Right
+                    else, intention_list(k) = 2; % Left
+                    end
                 end
 
                 % 3. Check Clearance
@@ -81,15 +84,15 @@ function LHT_JustInTime_Traffic()
                     if norm(cars(k).pos - start_pos) < 12, spawn_clear = false; break; end
                 end
                 
-                % 4. Spawn (Notice: Pivot/Radius are empty!)
+                % 4. Spawn
                 if spawn_clear
                     hGroup = create_complex_car(start_pos, angle, col, car_w, car_l);
                     hP = plot(0, 0, 'o', 'MarkerSize', 5, 'MarkerEdgeColor', 'r', 'MarkerFaceColor', 'r', 'Visible', 'off');
                               
                     new_car = struct('h', hGroup, 'hPivot', hP, 'pos', start_pos, 'angle', angle, ...
-                                     'intention', intention, 'state', 0, ...
-                                     'pivot', [0,0], 'radius', 0, 'start_theta', 0, 'turn_dir', 0, ...
-                                     'angle_covered', 0, 'speed', base_speed);
+                                     'intention', intention_list, 'intention_idx', 1, ...
+                                     'state', 0, 'pivot', [0,0], 'radius', 0, ...
+                                     'start_theta', 0, 'turn_dir', 0, 'angle_covered', 0, 'speed', base_speed);
                     cars(end+1) = new_car;
                 end
             end
@@ -117,36 +120,41 @@ function LHT_JustInTime_Traffic()
             
             if ~collision_detected
                 
-                % --- STATE 0: APPROACHING (The "Trigger" Check) ---
+                % --- STATE 0: APPROACHING ---
                 if c.state == 0
-                    % Move straight
                     c.pos = c.pos + [cos(c.angle), sin(c.angle)] * c.speed * dt;
                     
-                    % BOUNDARY CHECK: Have we entered the Junction Box?
-                    % We check if the car's position is inside the Junction bounds
+                    % BOUNDARY CHECK
                     inside_x = c.pos(1) > Junction.bounds(1) && c.pos(1) < Junction.bounds(2);
                     inside_y = c.pos(2) > Junction.bounds(3) && c.pos(2) < Junction.bounds(4);
                     
                     if inside_x && inside_y
-                        % --- JUST-IN-TIME CALCULATION ---
-                        % The car has just breached the perimeter. Calculate geometry NOW.
-                        
-                        if c.intention == 0 % Straight
-                            c.state = 2; % Skip turning state, go to Exit state
+                        % --- READ CURRENT INTENTION ---
+                        % Get the action for *this* specific junction step
+                        if c.intention_idx <= length(c.intention)
+                            current_action = c.intention(c.intention_idx);
                         else
-                            % Calculate Pivot and Radius based on where we are and what we want
-                            [c.pivot, c.radius, c.turn_dir] = calculate_turn_geometry(c, Junction);
+                            current_action = 0; % Default to straight if we run out of plans
+                        end
+                        
+                        % --- INCREMENT INDEX ---
+                        % We have 'used' this intention, so we increment for the NEXT junction
+                        c.intention_idx = c.intention_idx + 1;
+                        
+                        if current_action == 0 % Straight
+                            c.state = 2; 
+                        else
+                            % Calculate Pivot/Radius based on current_action
+                            [c.pivot, c.radius, c.turn_dir] = calculate_turn_geometry(c, Junction, current_action);
                             
-                            c.state = 1; % Enter Turning State
+                            c.state = 1;
                             c.start_theta = atan2(c.pos(2)-c.pivot(2), c.pos(1)-c.pivot(1));
                             c.angle_covered = 0;
-                            
-                            % Visuals
                             set(c.hPivot, 'XData', c.pivot(1), 'YData', c.pivot(2), 'Visible', 'on');
                         end
                     end
                     
-                % --- STATE 1: TURNING (The Execution) ---
+                % --- STATE 1: TURNING ---
                 elseif c.state == 1
                     c.angle_covered = c.angle_covered + (c.speed / c.radius) * dt;
                     curr_theta = c.start_theta + (c.angle_covered * c.turn_dir);
@@ -155,7 +163,6 @@ function LHT_JustInTime_Traffic()
                     if c.turn_dir == 1, c.angle = curr_theta + pi/2; 
                     else, c.angle = curr_theta - pi/2; end
                     
-                    % Blink Dot
                     if mod(floor(c.angle_covered * 12), 2) == 0
                          set(c.hPivot, 'MarkerFaceColor', 'r');
                     else
@@ -189,15 +196,10 @@ function LHT_JustInTime_Traffic()
     end
 end
 
-% --- NEW FUNCTION: JUST-IN-TIME CALCULATOR ---
-function [pivot, radius, turn_dir] = calculate_turn_geometry(c, Junction)
-    % This function runs ONLY when the car hits the junction line.
-    % It figures out the geometry based on the car's current angle.
-    
+% --- HELPER: Turn Calculator ---
+function [pivot, radius, turn_dir] = calculate_turn_geometry(c, Junction, action)
+    % Note: Added 'action' argument so we don't need to look up the struct here
     pivot = [0,0]; radius = 0; turn_dir = 0;
-    
-    % Determine incoming direction based on angle (approximate)
-    % N->S (-pi/2), S->N (pi/2), E->W (pi), W->E (0)
     
     coming_from = '';
     if abs(c.angle - pi/2) < 0.1, coming_from = 'South';
@@ -206,33 +208,31 @@ function [pivot, radius, turn_dir] = calculate_turn_geometry(c, Junction)
     else, coming_from = 'West';
     end
     
-    % Get Junction Bounds
-    b = Junction.bounds; % [x_min, x_max, y_min, y_max]
-    
+    b = Junction.bounds; 
     r_short = (Junction.width/2) - Junction.lane_offset;
     r_long  = (Junction.width/2) + Junction.lane_offset;
     
-    if c.intention == 1 % RIGHT TURN (Long)
+    if action == 1 % RIGHT TURN
         radius = r_long;
-        turn_dir = -1; % Clockwise
-        if strcmp(coming_from, 'South'), pivot = [b(2), b(3)]; % Bottom-Right Corner
-        elseif strcmp(coming_from, 'North'), pivot = [b(1), b(4)]; % Top-Left Corner
-        elseif strcmp(coming_from, 'West'), pivot = [b(1), b(3)]; % Bottom-Left Corner
-        elseif strcmp(coming_from, 'East'), pivot = [b(2), b(4)]; % Top-Right Corner
+        turn_dir = -1;
+        if strcmp(coming_from, 'South'), pivot = [b(2), b(3)];
+        elseif strcmp(coming_from, 'North'), pivot = [b(1), b(4)];
+        elseif strcmp(coming_from, 'West'), pivot = [b(1), b(3)];
+        elseif strcmp(coming_from, 'East'), pivot = [b(2), b(4)];
         end
         
-    elseif c.intention == 2 % LEFT TURN (Short)
+    elseif action == 2 % LEFT TURN
         radius = r_short;
-        turn_dir = 1; % Counter-Clockwise
-        if strcmp(coming_from, 'South'), pivot = [b(1), b(3)]; % Bottom-Left Corner
-        elseif strcmp(coming_from, 'North'), pivot = [b(2), b(4)]; % Top-Right Corner
-        elseif strcmp(coming_from, 'West'), pivot = [b(1), b(4)]; % Top-Left Corner
-        elseif strcmp(coming_from, 'East'), pivot = [b(2), b(3)]; % Bottom-Right Corner
+        turn_dir = 1; 
+        if strcmp(coming_from, 'South'), pivot = [b(1), b(3)];
+        elseif strcmp(coming_from, 'North'), pivot = [b(2), b(4)];
+        elseif strcmp(coming_from, 'West'), pivot = [b(1), b(4)];
+        elseif strcmp(coming_from, 'East'), pivot = [b(2), b(3)];
         end
     end
 end
 
-% --- DRAWING & HELPER FUNCTIONS (Standard) ---
+% --- DRAWING & HELPER FUNCTIONS ---
 function draw_smart_junction(J, map_size)
     x_min = J.bounds(1); x_max = J.bounds(2);
     y_min = J.bounds(3); y_max = J.bounds(4);

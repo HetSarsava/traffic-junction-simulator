@@ -1,6 +1,6 @@
-function LHT_Robust_NoTeleport()
+function LHT_Layered_Grid()
     % 1. Setup Figure
-    hFig = figure('Color',[0.15 0.15 0.15], 'Name', 'LHT Robust - No Teleport');
+    hFig = figure('Color',[0.15 0.15 0.15], 'Name', 'LHT Layered Grid');
     axis equal off; hold on;
     
     % --- UI SLIDER ---
@@ -15,7 +15,6 @@ function LHT_Robust_NoTeleport()
     map_size = 200;
     road_width = 16;
     
-    % Centers for 2x2 Grid
     centers = [60, 60; 140, 60; 60, 140; 140, 140];
     
     Junctions = [];
@@ -28,7 +27,6 @@ function LHT_Robust_NoTeleport()
         
         half_w = road_width / 2;
         cx = J.center(1); cy = J.center(2);
-        % Bounds: [x_min, x_max, y_min, y_max]
         J.bounds = [cx - half_w, cx + half_w, cy - half_w, cy + half_w];
         
         Junctions = [Junctions, J];
@@ -36,12 +34,20 @@ function LHT_Robust_NoTeleport()
     
     xlim([0 map_size]); ylim([0 map_size]);
     
-    % Draw junctions
+    % --- 3. DRAWING (LAYERED) ---
+    % FIX: We split drawing into two passes to prevent overlap issues
+    
+    % PASS 1: Draw All Roads (Bottom Layer)
     for k = 1:length(Junctions)
-        draw_smart_junction(Junctions(k), map_size);
+        draw_road_arms(Junctions(k), map_size);
+    end
+    
+    % PASS 2: Draw All Hollow Centers (Top Layer)
+    for k = 1:length(Junctions)
+        draw_hollow_box(Junctions(k));
     end
 
-    % --- 3. Simulation Settings ---
+    % --- 4. Simulation Settings ---
     cars = struct('h', {}, 'hPivot', {}, 'pos', {}, 'angle', {}, ...
                   'intention', {}, 'intention_idx', {}, ... 
                   'state', {}, 'pivot', {}, 'radius', {}, 'start_theta', {}, ...
@@ -52,40 +58,36 @@ function LHT_Robust_NoTeleport()
     dt = 0.04;
     spawn_timer = 0;
     
-    % --- 4. Main Loop ---
+    % --- 5. Main Loop ---
     while ishandle(hFig)
         spawn_timer = spawn_timer + dt;
         current_interval = get(hSlider, 'Value');
         set(hLabel, 'String', sprintf('Spawn Interval: %.2fs', current_interval));
         
-        % --- A. Spawner (LHT POSITIONS) ---
+        % --- A. Spawner ---
         if spawn_timer > current_interval
             spawn_timer = 0; 
-            
-            % Offset to the LEFT of the road center line
             off = road_width/4;
             
-            % [x, y, angle]
+            % Spawns [x, y, angle]
             spawns = [
-                60-off, -6, pi/2;          % Bottom-Left Rd -> Up
-                140-off, -6, pi/2;         % Bottom-Right Rd -> Up
-                60+off, map_size+6, -pi/2; % Top-Left Rd -> Down
-                140+off, map_size+6, -pi/2;% Top-Right Rd -> Down
-                -6, 60+off, 0;             % Left-Bottom Rd -> Right
-                -6, 140+off, 0;            % Left-Top Rd -> Right
-                map_size+6, 60-off, pi;    % Right-Bottom Rd -> Left
-                map_size+6, 140-off, pi    % Right-Top Rd -> Left
+                60-off, -6, pi/2;          
+                140-off, -6, pi/2;         
+                60+off, map_size+6, -pi/2; 
+                140+off, map_size+6, -pi/2;
+                -6, 60+off, 0;             
+                -6, 140+off, 0;            
+                map_size+6, 60-off, pi;    
+                map_size+6, 140-off, pi    
             ];
             
             idx = randi(8);
             start_pos = spawns(idx, 1:2);
             angle = spawns(idx, 3);
             
-            % Generate Intention List
             intention_list = randi([0 2], 1, 10);
             col = [rand rand rand]; 
 
-            % Check Clearance
             spawn_clear = true;
             for k=1:length(cars)
                 if norm(cars(k).pos - start_pos) < 15, spawn_clear = false; break; end
@@ -129,15 +131,11 @@ function LHT_Robust_NoTeleport()
                 if c.state == 0
                     c.pos = c.pos + [cos(c.angle), sin(c.angle)] * c.speed * dt;
                     
-                    % Check all Junctions
                     for k = 1:length(Junctions)
                         J = Junctions(k);
-                        
-                        % Explicit Boundary Check
                         if c.pos(1) > J.bounds(1) && c.pos(1) < J.bounds(2) && ...
                            c.pos(2) > J.bounds(3) && c.pos(2) < J.bounds(4)
                             
-                            % Get Action
                             if c.intention_idx <= length(c.intention)
                                 current_action = c.intention(c.intention_idx);
                             else
@@ -145,10 +143,9 @@ function LHT_Robust_NoTeleport()
                             end
                             c.intention_idx = c.intention_idx + 1;
                             
-                            if current_action == 0 % Straight
+                            if current_action == 0 
                                 c.state = 2; 
                             else
-                                % ROBUST CALCULATOR
                                 [c.pivot, c.radius, c.turn_dir] = calculate_robust_lht(c, J, current_action);
                                 c.state = 1;
                                 c.start_theta = atan2(c.pos(2)-c.pivot(2), c.pos(1)-c.pivot(1));
@@ -184,7 +181,6 @@ function LHT_Robust_NoTeleport()
                 elseif c.state == 2
                     c.pos = c.pos + [cos(c.angle), sin(c.angle)] * c.speed * dt;
                     
-                    % Reset State Logic: Check if we left ALL junctions
                     in_any_junction = false;
                     for k = 1:length(Junctions)
                         J = Junctions(k);
@@ -215,65 +211,56 @@ function LHT_Robust_NoTeleport()
     end
 end
 
-% --- ROBUST QUADRANT-BASED CALCULATOR (The Fix) ---
-function [pivot, radius, turn_dir] = calculate_robust_lht(c, J, action)
-    % This function uses the car's PHYSICAL POSITION to determine the quadrant.
-    % It does NOT rely on angles, which can be inaccurate.
-    
-    pivot = [0,0]; radius = 0; turn_dir = 0;
-    
-    % Define 4 Corners of the junction box
-    % TR = Top-Right, TL = Top-Left, etc.
-    % Bounds: [x_min, x_max, y_min, y_max]
-    b = J.bounds;
-    TL = [b(1), b(4)]; % x_min, y_max
-    TR = [b(2), b(4)]; % x_max, y_max
-    BL = [b(1), b(3)]; % x_min, y_min
-    BR = [b(2), b(3)]; % x_max, y_min
-    
-    % Determine Quadrant relative to Center
-    dx = c.pos(1) - J.center(1);
-    dy = c.pos(2) - J.center(2);
-    
-    % LHT Logic:
-    r_short = (J.width/2) - J.lane_offset;
-    r_long  = (J.width/2) + J.lane_offset;
-    
-    if action == 2 % LEFT TURN (Short)
-        radius = r_short;
-        turn_dir = 1; % CCW
-        
-        % Pivot is the corner in the SAME quadrant
-        if dx < 0 && dy < 0, pivot = BL;      % Incoming from South (Left Lane)
-        elseif dx < 0 && dy > 0, pivot = TL;  % Incoming from West (Top Lane)
-        elseif dx > 0 && dy > 0, pivot = TR;  % Incoming from North (Right Lane)
-        elseif dx > 0 && dy < 0, pivot = BR;  % Incoming from East (Bottom Lane)
-        end
-        
-    elseif action == 1 % RIGHT TURN (Long)
-        radius = r_long;
-        turn_dir = -1; % CW
-        
-        % Pivot is the corner in the CLOCKWISE adjacent quadrant
-        if dx < 0 && dy < 0, pivot = BR;      % In South(BL) -> Pivot BR
-        elseif dx < 0 && dy > 0, pivot = BL;  % In West(TL) -> Pivot BL
-        elseif dx > 0 && dy > 0, pivot = TL;  % In North(TR) -> Pivot TL
-        elseif dx > 0 && dy < 0, pivot = TR;  % In East(BR) -> Pivot TR
-        end
-    end
-end
+% --- LAYERED DRAWING FUNCTIONS ---
 
-% --- DRAWING ---
-function draw_smart_junction(J, map_size)
+function draw_road_arms(J, map_size)
+    % Only draws the grey road extensions
     x_min = J.bounds(1); x_max = J.bounds(2);
     y_min = J.bounds(3); y_max = J.bounds(4);
-    
-    fill([x_min, x_max, x_max, x_min], [y_min, y_min, y_max, y_max], [0.25 0.25 0.25], 'EdgeColor', 'y', 'LineStyle', '--');
     
     if J.active(1), fill([x_min, x_max, x_max, x_min], [y_max, y_max, map_size, map_size], [0.3 0.3 0.3], 'EdgeColor', 'none'); plot([J.center(1), J.center(1)], [y_max, map_size], 'w--'); end
     if J.active(2), fill([x_max, map_size, map_size, x_max], [y_min, y_min, y_max, y_max], [0.3 0.3 0.3], 'EdgeColor', 'none'); plot([x_max, map_size], [J.center(2), J.center(2)], 'w--'); end
     if J.active(3), fill([x_min, x_max, x_max, x_min], [0, 0, y_min, y_min], [0.3 0.3 0.3], 'EdgeColor', 'none'); plot([J.center(1), J.center(1)], [0, y_min], 'w--'); end
     if J.active(4), fill([0, x_min, x_min, 0], [y_min, y_min, y_max, y_max], [0.3 0.3 0.3], 'EdgeColor', 'none'); plot([0, x_min], [J.center(2), J.center(2)], 'w--'); end
+end
+
+function draw_hollow_box(J)
+    % Only draws the hollow center box
+    x_min = J.bounds(1); x_max = J.bounds(2);
+    y_min = J.bounds(3); y_max = J.bounds(4);
+    
+    % Draw box with background color fill and white edge
+    fill([x_min, x_max, x_max, x_min], [y_min, y_min, y_max, y_max], ...
+         [0.15 0.15 0.15], 'EdgeColor', 'w', 'LineWidth', 1.5);
+end
+
+% --- CALCULATOR & HELPERS ---
+function [pivot, radius, turn_dir] = calculate_robust_lht(c, J, action)
+    pivot = [0,0]; radius = 0; turn_dir = 0;
+    b = J.bounds;
+    TL = [b(1), b(4)]; TR = [b(2), b(4)];
+    BL = [b(1), b(3)]; BR = [b(2), b(3)];
+    
+    dx = c.pos(1) - J.center(1);
+    dy = c.pos(2) - J.center(2);
+    r_short = (J.width/2) - J.lane_offset;
+    r_long  = (J.width/2) + J.lane_offset;
+    
+    if action == 2 % LEFT (Short)
+        radius = r_short; turn_dir = 1; 
+        if dx < 0 && dy < 0, pivot = BL;
+        elseif dx < 0 && dy > 0, pivot = TL;
+        elseif dx > 0 && dy > 0, pivot = TR;
+        elseif dx > 0 && dy < 0, pivot = BR;
+        end
+    elseif action == 1 % RIGHT (Long)
+        radius = r_long; turn_dir = -1;
+        if dx < 0 && dy < 0, pivot = BR;
+        elseif dx < 0 && dy > 0, pivot = BL;
+        elseif dx > 0 && dy > 0, pivot = TL;
+        elseif dx > 0 && dy < 0, pivot = TR;
+        end
+    end
 end
 
 function hGroup = create_complex_car(pos, angle, color, w, l)

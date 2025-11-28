@@ -1,42 +1,54 @@
-function LHT_Multi_Intention_Traffic()
+function LHT_Robust_NoTeleport()
     % 1. Setup Figure
-    hFig = figure('Color',[0.15 0.15 0.15], 'Name', 'Multi-Intention Logic');
+    hFig = figure('Color',[0.15 0.15 0.15], 'Name', 'LHT Robust - No Teleport');
     axis equal off; hold on;
     
     % --- UI SLIDER ---
-    hSlider = uicontrol('Style', 'slider', 'Min', 0.2, 'Max', 3.0, 'Value', 0.8, ...
+    hSlider = uicontrol('Style', 'slider', 'Min', 0.2, 'Max', 2.0, 'Value', 0.6, ...
                         'Position', [150 20 300 20]);
     hLabel = uicontrol('Style', 'text', 'Position', [150 45 300 20], ...
-                       'String', 'Spawn Interval: 0.8s', ...
+                       'String', 'Spawn Interval: 0.6s', ...
                        'BackgroundColor', [0.15 0.15 0.15], 'ForegroundColor', 'w', ...
                        'FontSize', 10);
                         
-    % --- 2. DEFINE THE JUNCTION ---
-    map_size = 100;
+    % --- 2. DEFINE MAP (2x2 Grid) ---
+    map_size = 200;
     road_width = 16;
-    center = map_size / 2;
-    active_dirs = [true, true, true, true]; 
     
-    Junction = struct();
-    Junction.center = center;
-    Junction.width = road_width;
-    Junction.lane_offset = road_width / 4;
-    Junction.active = active_dirs; 
-    half_w = road_width / 2;
-    Junction.bounds = [center - half_w, center + half_w, center - half_w, center + half_w];
+    % Centers for 2x2 Grid
+    centers = [60, 60; 140, 60; 60, 140; 140, 140];
+    
+    Junctions = [];
+    for k = 1:4
+        J = struct();
+        J.center = centers(k, :);
+        J.width = road_width;
+        J.lane_offset = road_width / 4;
+        J.active = [true, true, true, true]; 
+        
+        half_w = road_width / 2;
+        cx = J.center(1); cy = J.center(2);
+        % Bounds: [x_min, x_max, y_min, y_max]
+        J.bounds = [cx - half_w, cx + half_w, cy - half_w, cy + half_w];
+        
+        Junctions = [Junctions, J];
+    end
     
     xlim([0 map_size]); ylim([0 map_size]);
-    draw_smart_junction(Junction, map_size);
+    
+    % Draw junctions
+    for k = 1:length(Junctions)
+        draw_smart_junction(Junctions(k), map_size);
+    end
 
     % --- 3. Simulation Settings ---
-    % UPDATED STRUCT: 'intention' is now a list, added 'intention_idx'
     cars = struct('h', {}, 'hPivot', {}, 'pos', {}, 'angle', {}, ...
                   'intention', {}, 'intention_idx', {}, ... 
                   'state', {}, 'pivot', {}, 'radius', {}, 'start_theta', {}, ...
                   'turn_dir', {}, 'angle_covered', {}, 'speed', {}); 
     
     car_w = 4; car_l = 6;
-    base_speed = 25;
+    base_speed = 30;
     dt = 0.04;
     spawn_timer = 0;
     
@@ -46,55 +58,48 @@ function LHT_Multi_Intention_Traffic()
         current_interval = get(hSlider, 'Value');
         set(hLabel, 'String', sprintf('Spawn Interval: %.2fs', current_interval));
         
-        % --- A. Spawner ---
+        % --- A. Spawner (LHT POSITIONS) ---
         if spawn_timer > current_interval
             spawn_timer = 0; 
             
-            % 1. Pick Start Location
-            valid_spawns = [];
-            if Junction.active(3), valid_spawns(end+1) = 1; end % S
-            if Junction.active(1), valid_spawns(end+1) = 2; end % N
-            if Junction.active(4), valid_spawns(end+1) = 3; end % W
-            if Junction.active(2), valid_spawns(end+1) = 4; end % E
+            % Offset to the LEFT of the road center line
+            off = road_width/4;
             
-            if ~isempty(valid_spawns)
-                spawn_idx = randi(length(valid_spawns));
-                spawn_dir = valid_spawns(spawn_idx);
-                
-                switch spawn_dir
-                    case 1, start_pos=[center-Junction.lane_offset, -6]; angle=pi/2; col=[0.3 0.5 1];
-                    case 2, start_pos=[center+Junction.lane_offset, map_size+6]; angle=-pi/2; col=[1 0.3 0.3];
-                    case 3, start_pos=[-6, center+Junction.lane_offset]; angle=0; col=[0.3 0.9 0.3];
-                    case 4, start_pos=[map_size+6, center-Junction.lane_offset]; angle=pi; col=[0.9 0.9 0.3];
-                end
-                
-                % 2. GENERATE INTENTION LIST (Size 10)
-                intention_list = zeros(1, 10);
-                for k = 1:10
-                    r = rand; 
-                    if r < 0.4, intention_list(k) = 0; % Straight
-                    elseif r < 0.7, intention_list(k) = 1; % Right
-                    else, intention_list(k) = 2; % Left
-                    end
-                end
+            % [x, y, angle]
+            spawns = [
+                60-off, -6, pi/2;          % Bottom-Left Rd -> Up
+                140-off, -6, pi/2;         % Bottom-Right Rd -> Up
+                60+off, map_size+6, -pi/2; % Top-Left Rd -> Down
+                140+off, map_size+6, -pi/2;% Top-Right Rd -> Down
+                -6, 60+off, 0;             % Left-Bottom Rd -> Right
+                -6, 140+off, 0;            % Left-Top Rd -> Right
+                map_size+6, 60-off, pi;    % Right-Bottom Rd -> Left
+                map_size+6, 140-off, pi    % Right-Top Rd -> Left
+            ];
+            
+            idx = randi(8);
+            start_pos = spawns(idx, 1:2);
+            angle = spawns(idx, 3);
+            
+            % Generate Intention List
+            intention_list = randi([0 2], 1, 10);
+            col = [rand rand rand]; 
 
-                % 3. Check Clearance
-                spawn_clear = true;
-                for k=1:length(cars)
-                    if norm(cars(k).pos - start_pos) < 12, spawn_clear = false; break; end
-                end
-                
-                % 4. Spawn
-                if spawn_clear
-                    hGroup = create_complex_car(start_pos, angle, col, car_w, car_l);
-                    hP = plot(0, 0, 'o', 'MarkerSize', 5, 'MarkerEdgeColor', 'r', 'MarkerFaceColor', 'r', 'Visible', 'off');
-                              
-                    new_car = struct('h', hGroup, 'hPivot', hP, 'pos', start_pos, 'angle', angle, ...
-                                     'intention', intention_list, 'intention_idx', 1, ...
-                                     'state', 0, 'pivot', [0,0], 'radius', 0, ...
-                                     'start_theta', 0, 'turn_dir', 0, 'angle_covered', 0, 'speed', base_speed);
-                    cars(end+1) = new_car;
-                end
+            % Check Clearance
+            spawn_clear = true;
+            for k=1:length(cars)
+                if norm(cars(k).pos - start_pos) < 15, spawn_clear = false; break; end
+            end
+            
+            if spawn_clear
+                hGroup = create_complex_car(start_pos, angle, col, car_w, car_l);
+                hP = plot(0, 0, 'o', 'MarkerSize', 4, 'MarkerEdgeColor', 'r', 'MarkerFaceColor', 'r', 'Visible', 'off');
+                          
+                new_car = struct('h', hGroup, 'hPivot', hP, 'pos', start_pos, 'angle', angle, ...
+                                 'intention', intention_list, 'intention_idx', 1, ...
+                                 'state', 0, 'pivot', [0,0], 'radius', 0, ...
+                                 'start_theta', 0, 'turn_dir', 0, 'angle_covered', 0, 'speed', base_speed);
+                cars(end+1) = new_car;
             end
         end
         
@@ -102,8 +107,8 @@ function LHT_Multi_Intention_Traffic()
         for i = length(cars):-1:1
             c = cars(i);
             
-            % Collision Check (Standard)
-            look_ahead = 3.5; 
+            % Collision Check
+            look_ahead = 4.0; 
             future_pos = c.pos + [cos(c.angle), sin(c.angle)] * look_ahead;
             [fx, fy] = get_hitbox_coords(future_pos, car_w, car_l, c.angle);
             
@@ -124,33 +129,33 @@ function LHT_Multi_Intention_Traffic()
                 if c.state == 0
                     c.pos = c.pos + [cos(c.angle), sin(c.angle)] * c.speed * dt;
                     
-                    % BOUNDARY CHECK
-                    inside_x = c.pos(1) > Junction.bounds(1) && c.pos(1) < Junction.bounds(2);
-                    inside_y = c.pos(2) > Junction.bounds(3) && c.pos(2) < Junction.bounds(4);
-                    
-                    if inside_x && inside_y
-                        % --- READ CURRENT INTENTION ---
-                        % Get the action for *this* specific junction step
-                        if c.intention_idx <= length(c.intention)
-                            current_action = c.intention(c.intention_idx);
-                        else
-                            current_action = 0; % Default to straight if we run out of plans
-                        end
+                    % Check all Junctions
+                    for k = 1:length(Junctions)
+                        J = Junctions(k);
                         
-                        % --- INCREMENT INDEX ---
-                        % We have 'used' this intention, so we increment for the NEXT junction
-                        c.intention_idx = c.intention_idx + 1;
-                        
-                        if current_action == 0 % Straight
-                            c.state = 2; 
-                        else
-                            % Calculate Pivot/Radius based on current_action
-                            [c.pivot, c.radius, c.turn_dir] = calculate_turn_geometry(c, Junction, current_action);
+                        % Explicit Boundary Check
+                        if c.pos(1) > J.bounds(1) && c.pos(1) < J.bounds(2) && ...
+                           c.pos(2) > J.bounds(3) && c.pos(2) < J.bounds(4)
                             
-                            c.state = 1;
-                            c.start_theta = atan2(c.pos(2)-c.pivot(2), c.pos(1)-c.pivot(1));
-                            c.angle_covered = 0;
-                            set(c.hPivot, 'XData', c.pivot(1), 'YData', c.pivot(2), 'Visible', 'on');
+                            % Get Action
+                            if c.intention_idx <= length(c.intention)
+                                current_action = c.intention(c.intention_idx);
+                            else
+                                current_action = 0; 
+                            end
+                            c.intention_idx = c.intention_idx + 1;
+                            
+                            if current_action == 0 % Straight
+                                c.state = 2; 
+                            else
+                                % ROBUST CALCULATOR
+                                [c.pivot, c.radius, c.turn_dir] = calculate_robust_lht(c, J, current_action);
+                                c.state = 1;
+                                c.start_theta = atan2(c.pos(2)-c.pivot(2), c.pos(1)-c.pivot(1));
+                                c.angle_covered = 0;
+                                set(c.hPivot, 'XData', c.pivot(1), 'YData', c.pivot(2), 'Visible', 'on');
+                            end
+                            break; 
                         end
                     end
                     
@@ -178,6 +183,20 @@ function LHT_Multi_Intention_Traffic()
                 % --- STATE 2: EXITING ---
                 elseif c.state == 2
                     c.pos = c.pos + [cos(c.angle), sin(c.angle)] * c.speed * dt;
+                    
+                    % Reset State Logic: Check if we left ALL junctions
+                    in_any_junction = false;
+                    for k = 1:length(Junctions)
+                        J = Junctions(k);
+                        if c.pos(1) > J.bounds(1) && c.pos(1) < J.bounds(2) && ...
+                           c.pos(2) > J.bounds(3) && c.pos(2) < J.bounds(4)
+                           in_any_junction = true;
+                           break;
+                        end
+                    end
+                    if ~in_any_junction
+                        c.state = 0; 
+                    end
                 end
                 
                 % Update Graphics
@@ -196,52 +215,67 @@ function LHT_Multi_Intention_Traffic()
     end
 end
 
-% --- HELPER: Turn Calculator ---
-function [pivot, radius, turn_dir] = calculate_turn_geometry(c, Junction, action)
-    % Note: Added 'action' argument so we don't need to look up the struct here
+% --- ROBUST QUADRANT-BASED CALCULATOR (The Fix) ---
+function [pivot, radius, turn_dir] = calculate_robust_lht(c, J, action)
+    % This function uses the car's PHYSICAL POSITION to determine the quadrant.
+    % It does NOT rely on angles, which can be inaccurate.
+    
     pivot = [0,0]; radius = 0; turn_dir = 0;
     
-    coming_from = '';
-    if abs(c.angle - pi/2) < 0.1, coming_from = 'South';
-    elseif abs(c.angle + pi/2) < 0.1, coming_from = 'North';
-    elseif abs(abs(c.angle) - pi) < 0.1, coming_from = 'East';
-    else, coming_from = 'West';
-    end
+    % Define 4 Corners of the junction box
+    % TR = Top-Right, TL = Top-Left, etc.
+    % Bounds: [x_min, x_max, y_min, y_max]
+    b = J.bounds;
+    TL = [b(1), b(4)]; % x_min, y_max
+    TR = [b(2), b(4)]; % x_max, y_max
+    BL = [b(1), b(3)]; % x_min, y_min
+    BR = [b(2), b(3)]; % x_max, y_min
     
-    b = Junction.bounds; 
-    r_short = (Junction.width/2) - Junction.lane_offset;
-    r_long  = (Junction.width/2) + Junction.lane_offset;
+    % Determine Quadrant relative to Center
+    dx = c.pos(1) - J.center(1);
+    dy = c.pos(2) - J.center(2);
     
-    if action == 1 % RIGHT TURN
-        radius = r_long;
-        turn_dir = -1;
-        if strcmp(coming_from, 'South'), pivot = [b(2), b(3)];
-        elseif strcmp(coming_from, 'North'), pivot = [b(1), b(4)];
-        elseif strcmp(coming_from, 'West'), pivot = [b(1), b(3)];
-        elseif strcmp(coming_from, 'East'), pivot = [b(2), b(4)];
+    % LHT Logic:
+    r_short = (J.width/2) - J.lane_offset;
+    r_long  = (J.width/2) + J.lane_offset;
+    
+    if action == 2 % LEFT TURN (Short)
+        radius = r_short;
+        turn_dir = 1; % CCW
+        
+        % Pivot is the corner in the SAME quadrant
+        if dx < 0 && dy < 0, pivot = BL;      % Incoming from South (Left Lane)
+        elseif dx < 0 && dy > 0, pivot = TL;  % Incoming from West (Top Lane)
+        elseif dx > 0 && dy > 0, pivot = TR;  % Incoming from North (Right Lane)
+        elseif dx > 0 && dy < 0, pivot = BR;  % Incoming from East (Bottom Lane)
         end
         
-    elseif action == 2 % LEFT TURN
-        radius = r_short;
-        turn_dir = 1; 
-        if strcmp(coming_from, 'South'), pivot = [b(1), b(3)];
-        elseif strcmp(coming_from, 'North'), pivot = [b(2), b(4)];
-        elseif strcmp(coming_from, 'West'), pivot = [b(1), b(4)];
-        elseif strcmp(coming_from, 'East'), pivot = [b(2), b(3)];
+    elseif action == 1 % RIGHT TURN (Long)
+        radius = r_long;
+        turn_dir = -1; % CW
+        
+        % Pivot is the corner in the CLOCKWISE adjacent quadrant
+        if dx < 0 && dy < 0, pivot = BR;      % In South(BL) -> Pivot BR
+        elseif dx < 0 && dy > 0, pivot = BL;  % In West(TL) -> Pivot BL
+        elseif dx > 0 && dy > 0, pivot = TL;  % In North(TR) -> Pivot TL
+        elseif dx > 0 && dy < 0, pivot = TR;  % In East(BR) -> Pivot TR
         end
     end
 end
 
-% --- DRAWING & HELPER FUNCTIONS ---
+% --- DRAWING ---
 function draw_smart_junction(J, map_size)
     x_min = J.bounds(1); x_max = J.bounds(2);
     y_min = J.bounds(3); y_max = J.bounds(4);
+    
     fill([x_min, x_max, x_max, x_min], [y_min, y_min, y_max, y_max], [0.25 0.25 0.25], 'EdgeColor', 'y', 'LineStyle', '--');
-    if J.active(1), fill([x_min, x_max, x_max, x_min], [y_max, y_max, map_size, map_size], [0.3 0.3 0.3], 'EdgeColor', 'none'); plot([J.center, J.center], [y_max, map_size], 'w--'); end
-    if J.active(2), fill([x_max, map_size, map_size, x_max], [y_min, y_min, y_max, y_max], [0.3 0.3 0.3], 'EdgeColor', 'none'); plot([x_max, map_size], [J.center, J.center], 'w--'); end
-    if J.active(3), fill([x_min, x_max, x_max, x_min], [0, 0, y_min, y_min], [0.3 0.3 0.3], 'EdgeColor', 'none'); plot([J.center, J.center], [0, y_min], 'w--'); end
-    if J.active(4), fill([0, x_min, x_min, 0], [y_min, y_min, y_max, y_max], [0.3 0.3 0.3], 'EdgeColor', 'none'); plot([0, x_min], [J.center, J.center], 'w--'); end
+    
+    if J.active(1), fill([x_min, x_max, x_max, x_min], [y_max, y_max, map_size, map_size], [0.3 0.3 0.3], 'EdgeColor', 'none'); plot([J.center(1), J.center(1)], [y_max, map_size], 'w--'); end
+    if J.active(2), fill([x_max, map_size, map_size, x_max], [y_min, y_min, y_max, y_max], [0.3 0.3 0.3], 'EdgeColor', 'none'); plot([x_max, map_size], [J.center(2), J.center(2)], 'w--'); end
+    if J.active(3), fill([x_min, x_max, x_max, x_min], [0, 0, y_min, y_min], [0.3 0.3 0.3], 'EdgeColor', 'none'); plot([J.center(1), J.center(1)], [0, y_min], 'w--'); end
+    if J.active(4), fill([0, x_min, x_min, 0], [y_min, y_min, y_max, y_max], [0.3 0.3 0.3], 'EdgeColor', 'none'); plot([0, x_min], [J.center(2), J.center(2)], 'w--'); end
 end
+
 function hGroup = create_complex_car(pos, angle, color, w, l)
     hGroup = hgtransform;
     fill([-l/2, l/2, l/2, -l/2], [-w/2, -w/2, w/2, w/2], color, 'EdgeColor', 'k', 'Parent', hGroup);
@@ -251,6 +285,7 @@ function hGroup = create_complex_car(pos, angle, color, w, l)
     fill([l/2-l*0.1, l/2, l/2, l/2-l*0.1], [-w/2, -w/2, -w/2+w*0.2, -w/2+w*0.2], [1 1 0], 'EdgeColor', 'none', 'Parent', hGroup);
     set(hGroup, 'Matrix', makehgtform('translate', [pos(1) pos(2) 0], 'zrotate', angle));
 end
+
 function [x, y] = get_hitbox_coords(pos, w, l, angle)
     bx = [-l/2, l/2, l/2, -l/2]; by = [-w/2, -w/2, w/2, w/2];
     x = (bx*cos(angle) - by*sin(angle)) + pos(1); y = (bx*sin(angle) + by*cos(angle)) + pos(2);
